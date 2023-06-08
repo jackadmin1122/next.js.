@@ -129,3 +129,86 @@ export function getIsClientEntry(
   }
   return false
 }
+
+export type DynamicSegmentParams =
+  | {
+      params: string[]
+      isCatchAll: false
+    }
+  | {
+      params: string
+      isCatchAll: true
+      isOptionalCatchAll: boolean
+    }
+
+export function getDynamicSegmentParams(
+  filePath: string
+): DynamicSegmentParams {
+  const dirNames: string[] = []
+  let currentPath = path.dirname(filePath)
+
+  let dynamicSegmentNames: string | string[] = []
+  let isOptionalCatchAll = false
+
+  while (currentPath !== path.sep && !currentPath.endsWith(`${path.sep}app`)) {
+    dirNames.unshift(path.basename(currentPath))
+    currentPath = path.dirname(currentPath)
+  }
+
+  for (let dir of dirNames) {
+    if (dir.startsWith('[[...') && dir.endsWith(']]')) {
+      dynamicSegmentNames = dir.slice(5, -2)
+      isOptionalCatchAll = true
+      break
+    }
+
+    if (dir.startsWith('[') && dir.endsWith(']')) {
+      if (dir.startsWith('[...')) {
+        dynamicSegmentNames = dir.slice(4, -1)
+        break
+      }
+      ;(dynamicSegmentNames as string[]).push(dir.slice(1, -1))
+      continue
+    }
+  }
+
+  return Array.isArray(dynamicSegmentNames)
+    ? {
+        params: dynamicSegmentNames,
+        isCatchAll: false,
+      }
+    : {
+        params: dynamicSegmentNames,
+        isCatchAll: true,
+        isOptionalCatchAll,
+      }
+}
+
+export function getParamsType(filePath: string) {
+  const dynamicSegmentParams = getDynamicSegmentParams(filePath)
+
+  const hasDynamicSegments = dynamicSegmentParams.isCatchAll
+    ? true
+    : dynamicSegmentParams.params.length > 0
+
+  if (!hasDynamicSegments) return 'params: any'
+
+  if (!dynamicSegmentParams.isCatchAll) {
+    return `params: { ${dynamicSegmentParams.params
+      .map((s) => `${s}: string`)
+      .join(', ')} }`
+  }
+
+  if (!dynamicSegmentParams.isOptionalCatchAll) {
+    return `params: { ${dynamicSegmentParams.params}: string[] }`
+  }
+
+  return `params: { ${dynamicSegmentParams.params}?: string[] }`
+}
+
+export function getParamsTypeMismatchMessage(
+  wrongType: string,
+  correctType: string
+) {
+  return `Type '${wrongType}' does not match params type from current file structure '${correctType}'.`
+}
