@@ -2,38 +2,51 @@
 
 import '../server/lib/cpu-profile'
 import type { StartServerOptions } from '../server/lib/start-server'
-import { getPort, printAndExit } from '../server/lib/utils'
+import {
+  RESTART_EXIT_CODE,
+  checkNodeDebugType,
+  getDebugPort,
+  getMaxOldSpaceSize,
+  getNodeOptionsWithoutInspect,
+  getPort,
+  printAndExit,
+} from '../server/lib/utils'
 import * as Log from '../build/output/log'
-import { CliCommand } from '../lib/commands'
+import type { CliCommand } from '../lib/commands'
 import { getProjectDir } from '../lib/get-project-dir'
 import { PHASE_DEVELOPMENT_SERVER } from '../shared/lib/constants'
 import path from 'path'
-import { NextConfigComplete } from '../server/config-shared'
+import type { NextConfigComplete } from '../server/config-shared'
 import { setGlobal, traceGlobals } from '../trace/shared'
 import { Telemetry } from '../telemetry/storage'
-import loadConfig, { getEnabledExperimentalFeatures } from '../server/config'
+import loadConfig from '../server/config'
 import { findPagesDir } from '../lib/find-pages-dir'
 import { fileExists, FileType } from '../lib/file-exists'
 import { getNpxCommand } from '../lib/helpers/get-npx-command'
 import { createSelfSignedCertificate } from '../lib/mkcert'
+import type { SelfSignedCertificate } from '../lib/mkcert'
 import uploadTrace from '../trace/upload-trace'
-import { startServer } from '../server/lib/start-server'
-import { loadEnvConfig } from '@next/env'
+import { initialEnv } from '@next/env'
 import { trace } from '../trace'
+import { fork } from 'child_process'
 import {
   getReservedPortExplanation,
   isPortIsReserved,
 } from '../lib/helpers/get-reserved-port'
-import { validateTurboNextConfig } from '../lib/turbopack-warning'
+import os from 'os'
 
 let dir: string
+let child: undefined | ReturnType<typeof fork>
 let config: NextConfigComplete
 let isTurboSession = false
 let traceUploadUrl: string
 let sessionStopHandled = false
 let sessionStarted = Date.now()
 
-const handleSessionStop = async () => {
+const handleSessionStop = async (signal: string | null) => {
+  if (child) {
+    child.kill((signal as any) || 0)
+  }
   if (sessionStopHandled) return
   sessionStopHandled = true
 
@@ -96,8 +109,8 @@ const handleSessionStop = async () => {
   process.exit(0)
 }
 
-process.on('SIGINT', handleSessionStop)
-process.on('SIGTERM', handleSessionStop)
+process.on('SIGINT', () => handleSessionStop('SIGINT'))
+process.on('SIGTERM', () => handleSessionStop('SIGTERM'))
 
 const nextDev: CliCommand = async (args) => {
   if (args['--help']) {
@@ -179,24 +192,7 @@ const nextDev: CliCommand = async (args) => {
   // some set-ups that rely on listening on other interfaces
   const host = args['--hostname']
 
-  const { loadedEnvFiles } = loadEnvConfig(dir, true, console, false)
-
-  let expFeatureInfo: string[] = []
-  config = await loadConfig(PHASE_DEVELOPMENT_SERVER, dir, {
-    onLoadUserConfig(userConfig) {
-      const userNextConfigExperimental = getEnabledExperimentalFeatures(
-        userConfig.experimental
-      )
-      expFeatureInfo = userNextConfigExperimental.sort(
-        (a, b) => a.length - b.length
-      )
-    },
-  })
-
-  let envInfo: string[] = []
-  if (loadedEnvFiles.length > 0) {
-    envInfo = loadedEnvFiles.map((f) => f.path)
-  }
+  config = await loadConfig(PHASE_DEVELOPMENT_SERVER, dir)
 
   const isExperimentalTestProxy = args['--experimental-test-proxy']
 
@@ -211,25 +207,78 @@ const nextDev: CliCommand = async (args) => {
     isDev: true,
     hostname: host,
     isExperimentalTestProxy,
-    envInfo,
-    expFeatureInfo,
   }
 
   if (args['--turbo']) {
     process.env.TURBOPACK = '1'
   }
 
-  if (process.env.TURBOPACK) {
-    await validateTurboNextConfig({
-      isCustomTurbopack: !!process.env.__INTERNAL_CUSTOM_TURBOPACK_BINDINGS,
-      ...devServerOptions,
-      isDev: true,
-    })
-  }
+  isTurboSession = !!process.env.TURBOPACK
 
   const distDir = path.join(dir, config.distDir ?? '.next')
   setGlobal('phase', PHASE_DEVELOPMENT_SERVER)
   setGlobal('distDir', distDir)
+
+  const startServerPath = require.resolve('../server/lib/start-server')
+  async function startServer(options: StartServerOptions) {
+    return new Promise<void>((resolve) => {
+      let resolved = false
+      const defaultEnv = (initialEnv || process.env) as typeof process.env
+
+      let NODE_OPTIONS = getNodeOptionsWithoutInspect()
+      let nodeDebugType = checkNodeDebugType()
+
+      const maxOldSpaceSize = getMaxOldSpaceSize()
+
+      if (!maxOldSpaceSize && !process.env.NEXT_DISABLE_MEM_OVERRIDE) {
+        const totalMem = os.totalmem()
+        const totalMemInMB = Math.floor(totalMem / 1024 / 1024)
+        NODE_OPTIONS = `${NODE_OPTIONS} --max-old-space-size=${Math.floor(
+          totalMemInMB * 0.5
+        )}`
+      }
+
+      if (nodeDebugType) {
+        NODE_OPTIONS = `${NODE_OPTIONS} --${nodeDebugType}=${
+          getDebugPort() + 1
+        }`
+      }
+
+      child = fork(startServerPath, {
+        stdio: 'inherit',
+        env: {
+          ...defaultEnv,
+          TURBOPACK: process.env.TURBOPACK,
+          NEXT_PRIVATE_WORKER: '1',
+          NODE_EXTRA_CA_CERTS: options.selfSignedCertificate
+            ? options.selfSignedCertificate.rootCA
+            : defaultEnv.NODE_EXTRA_CA_CERTS,
+          NODE_OPTIONS,
+        },
+      })
+
+      child.on('message', (msg: any) => {
+        if (msg && typeof msg === 'object') {
+          if (msg.nextWorkerReady) {
+            child?.send({ nextWorkerOptions: options })
+          } else if (msg.nextServerReady && !resolved) {
+            resolved = true
+            resolve()
+          }
+        }
+      })
+
+      child.on('exit', async (code, signal) => {
+        if (sessionStopHandled || signal) {
+          return
+        }
+        if (code === RESTART_EXIT_CODE) {
+          return startServer(options)
+        }
+        await handleSessionStop(signal)
+      })
+    })
+  }
 
   const runDevServer = async (reboot: boolean) => {
     try {
@@ -238,15 +287,17 @@ const nextDev: CliCommand = async (args) => {
           'Self-signed certificates are currently an experimental feature, use at your own risk.'
         )
 
-        let certificate: { key: string; cert: string } | undefined
+        let certificate: SelfSignedCertificate | undefined
 
-        if (
-          args['--experimental-https-key'] &&
-          args['--experimental-https-cert']
-        ) {
+        const key = args['--experimental-https-key']
+        const cert = args['--experimental-https-cert']
+        const rootCA = args['--experimental-https-ca']
+
+        if (key && cert) {
           certificate = {
-            key: path.resolve(args['--experimental-https-key']),
-            cert: path.resolve(args['--experimental-https-cert']),
+            key: path.resolve(key),
+            cert: path.resolve(cert),
+            rootCA: rootCA ? path.resolve(rootCA) : undefined,
           }
         } else {
           certificate = await createSelfSignedCertificate(host)
@@ -271,5 +322,17 @@ const nextDev: CliCommand = async (args) => {
     await runDevServer(false)
   })
 }
+
+function cleanup() {
+  if (!child) {
+    return
+  }
+
+  child.kill('SIGTERM')
+}
+
+process.on('exit', cleanup)
+process.on('SIGINT', cleanup)
+process.on('SIGTERM', cleanup)
 
 export { nextDev }
