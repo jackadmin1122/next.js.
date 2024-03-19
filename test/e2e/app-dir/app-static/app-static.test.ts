@@ -3,7 +3,12 @@ import cheerio from 'cheerio'
 import { promisify } from 'util'
 import { join } from 'path'
 import { createNextDescribe } from 'e2e-utils'
-import { check, fetchViaHTTP, normalizeRegEx, waitFor } from 'next-test-utils'
+import {
+  check,
+  fetchViaHTTP,
+  normalizeRouteRegExes,
+  waitFor,
+} from 'next-test-utils'
 import stripAnsi from 'strip-ansi'
 
 const glob = promisify(globOrig)
@@ -761,13 +766,7 @@ createNextDescribe(
 
         for (const key of Object.keys(curManifest.dynamicRoutes)) {
           const item = curManifest.dynamicRoutes[key]
-
-          if (item.dataRouteRegex) {
-            item.dataRouteRegex = normalizeRegEx(item.dataRouteRegex)
-          }
-          if (item.routeRegex) {
-            item.routeRegex = normalizeRegEx(item.routeRegex)
-          }
+          normalizeRouteRegExes(item)
         }
 
         for (const key of Object.keys(curManifest.routes)) {
@@ -1559,7 +1558,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/articles\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/articles\\/([^\\/]+?)?$",
             },
             "/blog/[author]": {
               "dataRoute": "/blog/[author].rsc",
@@ -1576,7 +1575,7 @@ createNextDescribe(
                 },
               ],
               "fallback": false,
-              "routeRegex": "^\\/blog\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/blog\\/([^\\/]+?)?$",
             },
             "/blog/[author]/[slug]": {
               "dataRoute": "/blog/[author]/[slug].rsc",
@@ -1593,7 +1592,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/blog\\/([^\\/]+?)\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/blog\\/([^\\/]+?)\\/([^\\/]+?)?$",
             },
             "/dynamic-error/[id]": {
               "dataRoute": "/dynamic-error/[id].rsc",
@@ -1610,7 +1609,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/dynamic\\-error\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/dynamic\\-error\\/([^\\/]+?)?$",
             },
             "/force-static/[slug]": {
               "dataRoute": "/force-static/[slug].rsc",
@@ -1627,7 +1626,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/force\\-static\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/force\\-static\\/([^\\/]+?)?$",
             },
             "/gen-params-dynamic-revalidate/[slug]": {
               "dataRoute": "/gen-params-dynamic-revalidate/[slug].rsc",
@@ -1644,7 +1643,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/gen\\-params\\-dynamic\\-revalidate\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/gen\\-params\\-dynamic\\-revalidate\\/([^\\/]+?)?$",
             },
             "/hooks/use-pathname/[slug]": {
               "dataRoute": "/hooks/use-pathname/[slug].rsc",
@@ -1661,7 +1660,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/hooks\\/use\\-pathname\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/hooks\\/use\\-pathname\\/([^\\/]+?)?$",
             },
             "/partial-gen-params-no-additional-lang/[lang]/[slug]": {
               "dataRoute": "/partial-gen-params-no-additional-lang/[lang]/[slug].rsc",
@@ -1678,7 +1677,7 @@ createNextDescribe(
                 },
               ],
               "fallback": false,
-              "routeRegex": "^\\/partial\\-gen\\-params\\-no\\-additional\\-lang\\/([^\\/]+?)\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/partial\\-gen\\-params\\-no\\-additional\\-lang\\/([^\\/]+?)\\/([^\\/]+?)?$",
             },
             "/partial-gen-params-no-additional-slug/[lang]/[slug]": {
               "dataRoute": "/partial-gen-params-no-additional-slug/[lang]/[slug].rsc",
@@ -1695,7 +1694,7 @@ createNextDescribe(
                 },
               ],
               "fallback": false,
-              "routeRegex": "^\\/partial\\-gen\\-params\\-no\\-additional\\-slug\\/([^\\/]+?)\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/partial\\-gen\\-params\\-no\\-additional\\-slug\\/([^\\/]+?)\\/([^\\/]+?)?$",
             },
             "/ssg-draft-mode/[[...route]]": {
               "dataRoute": "/ssg-draft-mode/[[...route]].rsc",
@@ -1712,7 +1711,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/ssg\\-draft\\-mode(?:\\/(.+?))?(?:\\/)?$",
+              "routeRegex": "^\\/ssg\\-draft\\-mode(?:\\/(.+?))?$",
             },
             "/static-to-dynamic-error-forced/[id]": {
               "dataRoute": "/static-to-dynamic-error-forced/[id].rsc",
@@ -1729,7 +1728,7 @@ createNextDescribe(
                 },
               ],
               "fallback": null,
-              "routeRegex": "^\\/static\\-to\\-dynamic\\-error\\-forced\\/([^\\/]+?)(?:\\/)?$",
+              "routeRegex": "^\\/static\\-to\\-dynamic\\-error\\-forced\\/([^\\/]+?)?$",
             },
           }
         `)
