@@ -3,7 +3,13 @@ import cookie from 'cookie'
 import cheerio from 'cheerio'
 import { join, sep } from 'path'
 import escapeRegex from 'escape-string-regexp'
-import { createNext, FileRef } from 'e2e-utils'
+import {
+  createNext,
+  FileRef,
+  isNextDeploy,
+  isNextDev,
+  isNextStart,
+} from 'e2e-utils'
 import { NextInstance } from 'test/lib/next-modes/base'
 import {
   check,
@@ -754,7 +760,7 @@ describe('Prerender', () => {
       expect(value).toMatch(/Hi \[third\] \[fourth\]/)
     })
 
-    if ((global as any).isNextStart) {
+    if (isNextStart) {
       // TODO: dev currently renders this page as blocking, meaning it shows the
       // server error instead of continuously retrying. Do we want to change this?
       it.skip('should reload page on failed data request, and retry', async () => {
@@ -970,7 +976,7 @@ describe('Prerender', () => {
       )
     })
 
-    if ((global as any).isNextDev) {
+    if (isNextDev) {
       it('should show warning every time page with large amount of page data is returned', async () => {
         await renderViaHTTP(next.url, '/large-page-data-ssr')
         await check(
@@ -987,7 +993,7 @@ describe('Prerender', () => {
       })
     }
 
-    if ((global as any).isNextStart) {
+    if (isNextStart) {
       it('should only show warning once per page when large amount of page data is returned', async () => {
         await renderViaHTTP(next.url, '/large-page-data-ssr')
         await check(
@@ -1003,7 +1009,7 @@ describe('Prerender', () => {
       })
     }
 
-    if ((global as any).isNextDev) {
+    if (isNextDev) {
       it('should not show warning from url prop being returned', async () => {
         const urlPropPage = 'pages/url-prop.js'
         await next.patchFile(
@@ -1289,7 +1295,7 @@ describe('Prerender', () => {
         await check(() => getBrowserBodyText(browser), /hello /)
       })
 
-      if ((global as any).isNextStart && !isDeploy) {
+      if (isNextStart && !isDeploy) {
         it('outputs dataRoutes in routes-manifest correctly', async () => {
           const { dataRoutes } = JSON.parse(
             await next.readFile('.next/routes-manifest.json')
@@ -2060,7 +2066,7 @@ describe('Prerender', () => {
       })
     }
 
-    if ((global as any).isNextStart) {
+    if (isNextStart) {
       it('should of formatted build output correctly', () => {
         expect(next.cliOutput).toMatch(/○ \/normal/)
         expect(next.cliOutput).toMatch(/● \/blog\/\[post\]/)
@@ -2479,5 +2485,5 @@ describe('Prerender', () => {
       expect(next.cliOutput).not.toContain('argument entity must be string')
     })
   }
-  runTests((global as any).isNextDev, (global as any).isNextDeploy)
+  runTests(isNextDev, isNextDeploy)
 })
