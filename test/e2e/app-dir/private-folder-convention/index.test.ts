@@ -7,6 +7,11 @@ describe('private-folder-convention', () => {
 
   it('should not type check page convention on _private folder', async () => {
     const $ = await next.render$('/')
-    expect($('p').text()).toBe('hello world')
+    expect($('h1').text()).toBe('hello world')
+  })
+
+  it('should not type check page convention on recursive _private folder', async () => {
+    const $ = await next.render$('/')
+    expect($('h2').text()).toBe('hello world')
   })
 })

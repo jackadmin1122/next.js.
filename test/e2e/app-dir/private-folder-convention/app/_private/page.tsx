@@ -1,4 +1,4 @@
 // not default, so unconventional for page.tsx
 export function Private() {
-  return <p>hello world</p>
+  return <h1>hello world</h1>
 }
