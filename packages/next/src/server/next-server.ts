@@ -1081,18 +1081,18 @@ export default class NextNodeServer extends BaseServer {
 
   private normalizeReq(
     req: BaseNextRequest | IncomingMessage
-  ): BaseNextRequest {
-    return !(req instanceof NodeNextRequest)
-      ? new NodeNextRequest(req as IncomingMessage)
-      : req
+  ): NodeNextRequest {
+    return req instanceof NodeNextRequest
+      ? req
+      : new NodeNextRequest(req as IncomingMessage)
   }
 
   private normalizeRes(
     res: BaseNextResponse | ServerResponse
-  ): BaseNextResponse {
-    return !(res instanceof NodeNextResponse)
-      ? new NodeNextResponse(res as ServerResponse)
-      : res
+  ): NodeNextResponse {
+    return res instanceof NodeNextResponse
+      ? res
+      : new NodeNextResponse(res as ServerResponse)
   }
 
   public getRequestHandler(): NodeRequestHandler {
@@ -1116,9 +1116,9 @@ export default class NextNodeServer extends BaseServer {
     })
 
     const handler = super.getRequestHandler()
-    return (req, res, parsedUrl) => {
-      const normalizedReq = this.normalizeReq(req)
-      const normalizedRes = this.normalizeRes(res)
+    return (_req, _res, parsedUrl) => {
+      const req = this.normalizeReq(_req)
+      const res = this.normalizeRes(_res)
 
       const loggingFetchesConfig = this.nextConfig.logging?.fetches
       const enabledVerboseLogging = !!loggingFetchesConfig
@@ -1140,7 +1140,7 @@ export default class NextNodeServer extends BaseServer {
           if (!isRouteRequest || isRSC) return
 
           const reqEnd = Date.now()
-          const fetchMetrics = normalizedReq.fetchMetrics || []
+          const fetchMetrics = req.fetchMetrics ?? []
           const reqDuration = reqEnd - reqStart
 
           const statusColor = (status?: number) => {
@@ -1245,11 +1245,11 @@ export default class NextNodeServer extends BaseServer {
               }
             }
           }
-          origRes.off('close', reqCallback)
+          res.originalResponse.off('close', reqCallback)
         }
-        origRes.on('close', reqCallback)
+        res.originalResponse.on('close', reqCallback)
       }
-      return handler(normalizedReq, normalizedRes, parsedUrl)
+      return handler(req, res, parsedUrl)
     }
   }
 
