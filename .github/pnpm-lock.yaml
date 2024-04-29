@@ -112,6 +112,12 @@ importers:
         specifier: 5.1.6
         version: 5.1.6
 
+  actions/notion-db-sync:
+    dependencies:
+      '@notionhq/client':
+        specifier: ^2.2.14
+        version: 2.2.14
+
   actions/upload-turboyet-data:
     dependencies:
       '@vercel/kv':
@@ -224,6 +230,16 @@ packages:
   /@fastify/busboy@2.1.0:
     resolution: {integrity: sha512-+KpH+QxZU7O4675t3mnkQKcZZg56u+K/Ct2K+N2AZYNVK8kyeo/bI18tI8aPm3tvNNRyTWfj6s5tnGNlcbQRsA==}
     engines: {node: '>=14'}
+    dev: false
+
+  /@notionhq/client@2.2.14:
+    resolution: {integrity: sha512-oqUefZtCiJPCX+74A1Os9OVTef3fSnVWe2eVQtU1HJSD+nsfxfhwvDKnzJTh2Tw1ZHKLxpieHB/nzGdY+Uo12A==}
+    engines: {node: '>=12'}
+    dependencies:
+      '@types/node-fetch': 2.6.11
+      node-fetch: 2.6.12
+    transitivePeerDependencies:
+      - encoding
     dev: false
 
   /@octokit/auth-token@2.5.0:
@@ -432,6 +448,13 @@ packages:
   /@types/github-slugger@1.3.0:
     resolution: {integrity: sha512-J/rMZa7RqiH/rT29TEVZO4nBoDP9XJOjnbbIofg7GQKs4JIduEO3WLpte+6WeUz/TcrXKlY+bM7FYrp8yFB+3g==}
     dev: true
+
+  /@types/node-fetch@2.6.11:
+    resolution: {integrity: sha512-24xFj9R5+rfQJLRyM56qh+wnVSYhyXC2tkoBndtY0U+vubqNsYXGjufB2nn8Q6gt0LrARwL6UBtMCSVCwl4B1g==}
+    dependencies:
+      '@types/node': 18.16.19
+      form-data: 4.0.0
+    dev: false
 
   /@types/node@18.16.19:
     resolution: {integrity: sha512-IXl7o+R9iti9eBW4Wg2hx1xQDig183jj7YLn8F7udNceyfkbn1ZxmzZXuak20gR40D7pIkIY1kYGx5VIGbaHKA==}
