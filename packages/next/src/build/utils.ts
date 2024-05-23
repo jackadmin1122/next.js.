@@ -1391,6 +1391,9 @@ export async function buildAppStaticPaths({
         incrementalCache,
         supportsDynamicHTML: true,
         isRevalidate: false,
+        experimental: {
+          after: false,
+        },
       },
     },
     async () => {
@@ -1435,6 +1438,21 @@ export async function buildAppStaticPaths({
           const newParams: Params[] = []
 
           if (curGenerate.generateStaticParams) {
+            const curStore =
+              ComponentMod.staticGenerationAsyncStorage.getStore()
+
+            if (curStore) {
+              if (typeof curGenerate?.config?.fetchCache !== 'undefined') {
+                curStore.fetchCache = curGenerate.config.fetchCache
+              }
+              if (typeof curGenerate?.config?.revalidate !== 'undefined') {
+                curStore.revalidate = curGenerate.config.revalidate
+              }
+              if (curGenerate?.config?.dynamic === 'force-dynamic') {
+                curStore.forceDynamic = true
+              }
+            }
+
             for (const params of paramsItems) {
               const result = await curGenerate.generateStaticParams({
                 params,
@@ -1768,12 +1786,6 @@ export async function isPageStatic({
       const config: PageConfig = isClientComponent
         ? {}
         : componentsResult.pageConfig
-
-      if (config.unstable_includeFiles || config.unstable_excludeFiles) {
-        Log.warn(
-          `unstable_includeFiles/unstable_excludeFiles has been removed in favor of the option in next.config.js.\nSee more info here: https://nextjs.org/docs/advanced-features/output-file-tracing#caveats`
-        )
-      }
 
       let isStatic = false
       if (!hasStaticProps && !hasGetInitialProps && !hasServerProps) {
