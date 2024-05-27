@@ -150,6 +150,7 @@ export type AppRenderContext = AppRenderBaseContext & {
   isNotFoundPath: boolean
   nonce: string | undefined
   res: BaseNextResponse
+  temporaryReferences: import('react-dom/server.edge').TemporaryReferencesSet
 }
 
 function createNotFoundLoaderTree(loaderTree: LoaderTree): LoaderTree {
@@ -367,6 +368,7 @@ async function generateFlight(
     {
       onError: ctx.flightDataRendererErrorHandler,
       nonce: ctx.nonce,
+      temporaryReferences: ctx.temporaryReferences,
     }
   )
 
@@ -388,6 +390,9 @@ type RenderToStreamOptions = {
   asNotFound: boolean
   tree: LoaderTree
   formState: any
+  temporaryReferences:
+    | import('react-dom/server.edge').TemporaryReferencesSet
+    | undefined
 }
 
 /**
@@ -859,6 +864,8 @@ async function renderToHTMLOrFlightImpl(
     nonce = getScriptNonceFromHeader(csp)
   }
 
+  const temporaryReferences = ComponentMod.createTemporaryReferenceSet()
+
   const ctx: AppRenderContext = {
     ...baseCtx,
     getDynamicParamFromSegment,
@@ -879,6 +886,7 @@ async function renderToHTMLOrFlightImpl(
     isNotFoundPath,
     nonce,
     res,
+    temporaryReferences,
   }
 
   if (isRSCRequest && !isStaticGeneration) {
@@ -959,6 +967,7 @@ async function renderToHTMLOrFlightImpl(
         {
           onError: serverComponentsErrorHandler,
           nonce,
+          temporaryReferences,
         }
       )
 
@@ -1291,6 +1300,7 @@ async function renderToHTMLOrFlightImpl(
           {
             onError: serverComponentsErrorHandler,
             nonce,
+            temporaryReferences,
           }
         )
 
@@ -1310,6 +1320,7 @@ async function renderToHTMLOrFlightImpl(
               // Include hydration scripts in the HTML
               bootstrapScripts: [errorBootstrapScript],
               formState,
+              temporaryReferences,
             },
           })
 
@@ -1364,6 +1375,7 @@ async function renderToHTMLOrFlightImpl(
     requestStore,
     serverActions,
     ctx,
+    temporaryReferences,
   })
 
   let formState: null | any = null
@@ -1374,6 +1386,7 @@ async function renderToHTMLOrFlightImpl(
         asNotFound: true,
         tree: notFoundLoaderTree,
         formState,
+        temporaryReferences,
       })
 
       return new RenderResult(response.stream, { metadata })
@@ -1395,6 +1408,7 @@ async function renderToHTMLOrFlightImpl(
     asNotFound: isNotFoundPath,
     tree: loaderTree,
     formState,
+    temporaryReferences,
   })
 
   // If we have pending revalidates, wait until they are all resolved.
