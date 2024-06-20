@@ -21,11 +21,16 @@
  */
 
 // Once postpone is in stable we should switch to importing the postpone export directly
+import type { StaticGenerationStore } from '../../client/components/static-generation-async-storage.external'
+
 import React from 'react'
 
-import type { StaticGenerationStore } from '../../client/components/static-generation-async-storage.external'
 import { DynamicServerError } from '../../client/components/hooks-server-context'
 import { StaticGenBailoutError } from '../../client/components/static-generation-bailout'
+import {
+  prerenderAsyncStorage,
+  type PrerenderStore,
+} from './prerender-async-storage.external'
 
 const hasPostpone = typeof React.unstable_postpone === 'function'
 
@@ -69,7 +74,8 @@ export function createPrerenderState(
  * This function communicates that the current scope should be treated as dynamic.
  *
  * In most cases this function is a no-op but if called during
- * a PPR prerender it will postpone the current sub-tree.
+ * a PPR prerender it will postpone the current sub-tree and calling
+ * it during a normal prerender will cause the entire prerender to abort
  */
 export function markCurrentScopeAsDynamic(
   store: StaticGenerationStore,
@@ -89,6 +95,14 @@ export function markCurrentScopeAsDynamic(
     throw new StaticGenBailoutError(
       `Route ${store.route} with \`dynamic = "error"\` couldn't be rendered statically because it used \`${expression}\`. See more info here: https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic#dynamic-rendering`
     )
+  }
+
+  const prerenderStore = prerenderAsyncStorage.getStore()
+  if (prerenderStore) {
+    // We are prerendering and need to abort the current render
+    // This doesn't throw and we fall through and possibly
+    // postpone or abort the render with a DynamicServerError
+    abortRSCRenderWithTracking(prerenderStore, expression)
   }
 
   if (
@@ -136,7 +150,17 @@ export function trackDynamicDataAccessed(
     throw new StaticGenBailoutError(
       `Route ${store.route} with \`dynamic = "error"\` couldn't be rendered statically because it used \`${expression}\`. See more info here: https://nextjs.org/docs/app/building-your-application/rendering/static-and-dynamic#dynamic-rendering`
     )
-  } else if (
+  }
+
+  const prerenderStore = prerenderAsyncStorage.getStore()
+  if (prerenderStore) {
+    // We are prerendering and need to abort the current render
+    // This doesn't throw and we fall through and possibly
+    // postpone or abort the render with a DynamicServerError
+    abortRSCRenderWithTracking(prerenderStore, expression)
+  }
+
+  if (
     // We are in a prerender (PPR enabled, during build)
     store.prerenderState
   ) {
@@ -197,6 +221,38 @@ function postponeWithTracking(
   })
 
   React.unstable_postpone(reason)
+}
+
+const NEXT_PRERENDER_INTERRUPTED = 'NEXT_PRERENDER_INTERRUPTED'
+
+function abortRSCRenderWithTracking(
+  prerenderStore: PrerenderStore,
+  expression: string
+): void {
+  if (!prerenderStore.abortedReason) {
+    prerenderStore.abortedReason = expression
+  }
+  if (hasPostpone) {
+    try {
+      React.unstable_postpone(NEXT_PRERENDER_INTERRUPTED)
+    } catch (e) {
+      prerenderStore.controller.abort(e)
+    }
+  } else {
+    prerenderStore.controller.abort(new Error(NEXT_PRERENDER_INTERRUPTED))
+  }
+}
+
+export function isRenderInterruptedReason(reason: string) {
+  return reason === NEXT_PRERENDER_INTERRUPTED
+}
+
+export function isRenderInterruptedError(error: unknown) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as any).message === NEXT_PRERENDER_INTERRUPTED
+  )
 }
 
 export function usedDynamicAPIs(prerenderState: PrerenderState): boolean {
@@ -263,4 +319,20 @@ export function createPostponedAbortSignal(reason: string): AbortSignal {
     controller.abort(x)
   }
   return controller.signal
+}
+
+/**
+ * This is a bit of a hack to allow us to abort a render using a Postpone instance instead of an Error which changes React's
+ * abort semantics slightly.
+ */
+export function getPostponedReason(reason: string): unknown {
+  assertPostpone()
+  try {
+    React.unstable_postpone(reason)
+  } catch (x: unknown) {
+    return x
+  }
+  throw new Error(
+    'Invariant: React.unstable_postpone did not throw when it was expected to'
+  )
 }

@@ -22,7 +22,7 @@ import type { DeepReadonly } from '../../shared/lib/deep-readonly'
 import type { BaseNextRequest, BaseNextResponse } from '../base-http'
 import type { IncomingHttpHeaders } from 'http'
 
-import React, { type JSX } from 'react'
+import React, { type ErrorInfo, type JSX } from 'react'
 
 import RenderResult, {
   type AppPageRenderResultMetadata,
@@ -112,6 +112,7 @@ import {
   usedDynamicAPIs,
   createPostponedAbortSignal,
   formatDynamicAPIAccesses,
+  isRenderInterruptedError,
 } from './dynamic-rendering'
 import {
   getClientComponentLoaderMetrics,
@@ -127,6 +128,9 @@ import type { RequestErrorContext } from '../instrumentation/types'
 import { getServerActionRequestMetadata } from '../lib/server-action-request-meta'
 import { createInitialRouterState } from '../../client/components/router-reducer/create-initial-router-state'
 import { createMutableActionQueue } from '../../shared/lib/router/action-queue'
+import { DynamicServerError } from '../../client/components/hooks-server-context'
+import { prerenderAsyncStorage } from './prerender-async-storage.external'
+import { CacheSignal } from './cache-signal'
 
 export type GetDynamicParamFromSegment = (
   // [slug] / [[slug]] / [...slug]
@@ -1022,20 +1026,162 @@ async function renderToHTMLOrFlightImpl(
         nonce,
         renderOpts.page
       )
+      const RSCPayload = await getRSCPayload(tree, ctx, asNotFound)
 
-      const rscPayload = await getRSCPayload(tree, ctx, asNotFound)
+      let serverStream
+      let reactServerIsDynamic = false
+      if (isStaticGeneration && renderOpts.experimental.dynamicIO) {
+        if (renderOpts.experimental.isRoutePPREnabled) {
+          // We're DBD + PPR
+          throw new Error(
+            'experimental.dynamicIO configuration option is not yet supported with experimental.ppr configuration option. Turn one of these options off'
+          )
+        } else {
+          /**
+           * DBD without PPR
+           *
+           * The general approach is to render the RSC tree first allowing for any inflight
+           * caches to resolve. Once we have settled inflight caches we can check and see if any
+           * synchronous dynamic APIs were used. If so we don't need to bother doing anything more
+           * because the page will be dynamic on re-render anyway
+           *
+           * If no sync dynamic APIs were used we then re-render and abort after a single Task.
+           * If the render errors we know that the page has some dynamic IO. This assumes and relies
+           * upon caches reading from a in process memory cache and resolving in a microtask. While this
+           * is true from our own default cache implementation and if you don't exceed our LRU size it
+           * might not be true for custom cache implementations.
+           *
+           * Future implementations can do some different strategies during build like using IPC to
+           * synchronously fill caches during this special rendering mode. For now this heuristic should work
+           */
 
-      // We kick off the Flight Request (render) here. It is ok to initiate the render in an arbitrary
-      // place however it is critical that we only construct the Flight Response inside the SSR
-      // render so that directives like preloads are correctly piped through
-      const serverStream = ComponentMod.renderToReadableStream(
-        rscPayload,
-        clientReferenceManifest.clientModules,
-        {
-          onError: serverComponentsErrorHandler,
-          nonce,
+          const cache = staticGenerationStore.incrementalCache
+          if (!cache) {
+            throw new Error(
+              'Expected incremental cache to exist. This is a bug in Next.js'
+            )
+          }
+
+          const PRERENDER_COMPLETE = 'NEXT_PRERENDER_COMPLETE'
+          const abortReason = new Error(PRERENDER_COMPLETE)
+
+          // We need to scope the dynamic IO state per render because we don't want to leak
+          // details between the prospective render and the final render
+          let flightController = new AbortController()
+
+          function onError(err: unknown, errorInfo: ErrorInfo) {
+            if (err === abortReason || isRenderInterruptedError(err)) {
+              reactServerIsDynamic = true
+              return
+            }
+
+            return serverComponentsErrorHandler(err, errorInfo)
+          }
+
+          const cacheSignal = new CacheSignal()
+          const prospectiveRenderPrerenderStore = {
+            cacheSignal,
+            controller: flightController,
+            abortedReason: '',
+          }
+
+          // We're not going to use the result of this render because the only time we could potentially
+          // to that is if it completes in a microtask and that's likely very rare for any non-trivial app
+          prerenderAsyncStorage.run(
+            // The store to scope
+            prospectiveRenderPrerenderStore,
+            // The function to run
+            ComponentMod.renderToReadableStream,
+            // ... the arguments for the function to run
+            RSCPayload,
+            clientReferenceManifest.clientModules,
+            {
+              nonce,
+              onError,
+              signal: flightController.signal,
+            }
+          )
+
+          // When this resolves the cache has no inflight reads and we can ascertain the dynamic outcome
+          await cacheSignal.cacheReady()
+          if (reactServerIsDynamic) {
+            // During a prospective render the only dynamic thing that can happen is a synchronous dynamic
+            // API acess. We expect to have a tracked expression to use for our dynamic error but we fall back
+            // to a generic error if we don't.
+            if (prospectiveRenderPrerenderStore.abortedReason) {
+              throw new DynamicServerError(
+                `Route ${staticGenerationStore.route} couldn't be rendered statically because it used \`${prospectiveRenderPrerenderStore.abortedReason}\`. See more info here: https://nextjs.org/docs/messages/dynamic-server-error`
+              )
+            } else {
+              console.error(
+                'Expected Next.js to keep track of reason for opting out of static rendering but one was not found. This is a bug in Next.js'
+              )
+              throw new DynamicServerError(
+                `Route ${staticGenerationStore.route} couldn't be rendered statically because it used a dynamic API. See more info here: https://nextjs.org/docs/messages/dynamic-server-error`
+              )
+            }
+          } else {
+            // The render didn't explicitly use any Dynamic APIs but it might have IO so we need to retry
+            // the render. We abort the current render here to avoid doing unecessary work.
+            // Keep in mind that while the render is aborted, inflight async ServerComponents can still continue
+            // and might call dynamic APIs.
+            flightController.abort(abortReason)
+          }
+
+          // Reset the dynamic IO state for the final render
+          flightController = new AbortController()
+          reactServerIsDynamic = false
+
+          const finalRenderPrerenderStore = {
+            cacheSignal: null,
+            controller: flightController,
+            abortedReason: '',
+          }
+
+          serverStream = prerenderAsyncStorage.run(
+            // The store to scope
+            finalRenderPrerenderStore,
+            // The function to run
+            ComponentMod.renderToReadableStream,
+            // ... the arguments for the function to run
+            RSCPayload,
+            clientReferenceManifest.clientModules,
+            {
+              nonce,
+              onError,
+              signal: flightController.signal,
+            }
+          )
+          // We would normally use scheduleImmediate to take advantage of setImmediate in Node however
+          // the edge builds use setTimeout and we use those even when running in node at the moment.
+          // This presents a problem where for node our abort will end up firing before the first tick of
+          // rendering because while it is scheduled after it is prioritized first. Once we start using React's
+          // node render methods we can switch to setImmediate (via scheduleImmediate) here.
+          await new Promise<void>((r) => setTimeout(r, 0))
+          flightController.abort(abortReason)
+          if (reactServerIsDynamic) {
+            // There was unfinished work after we aborted after the first render Task. This means there is some IO
+            // that is not covered by a cache and we need to bail out of static generation.
+            const err = new DynamicServerError(
+              `Route ${staticGenerationStore.route} couldn't be rendered statically because it used IO that was not cached. See more info here: https://nextjs.org/docs/messages/dynamic-io`
+            )
+            serverComponentsErrorHandler(err, {})
+            throw err
+          }
         }
-      )
+      } else {
+        // We kick off the Flight Request (render) here. It is ok to initiate the render in an arbitrary
+        // place however it is critical that we only construct the Flight Response inside the SSR
+        // render so that directives like preloads are correctly piped through
+        serverStream = ComponentMod.renderToReadableStream(
+          RSCPayload,
+          clientReferenceManifest.clientModules,
+          {
+            onError: serverComponentsErrorHandler,
+            nonce,
+          }
+        )
+      }
 
       // We are going to consume this render both for SSR and for inlining the flight data
       let [renderStream, dataStream] = serverStream.tee()
@@ -1151,7 +1297,7 @@ async function renderToHTMLOrFlightImpl(
             await flightRenderResult?.toUnchunkedBuffer(true)
 
           // First we check if we have any dynamic holes in our HTML prerender
-          if (usedDynamicAPIs(prerenderState)) {
+          if (usedDynamicAPIs(prerenderState) || reactServerIsDynamic) {
             if (result.postponed != null) {
               // This is the Dynamic HTML case.
               metadata.postponed = JSON.stringify(
@@ -1180,7 +1326,7 @@ async function renderToHTMLOrFlightImpl(
 
             await flightRenderComplete(flightSpy)
 
-            if (usedDynamicAPIs(prerenderState)) {
+            if (usedDynamicAPIs(prerenderState) || reactServerIsDynamic) {
               // This is the same logic above just repeated after ensuring the RSC stream itself has completed
               if (result.postponed != null) {
                 // This is the Dynamic HTML case.
