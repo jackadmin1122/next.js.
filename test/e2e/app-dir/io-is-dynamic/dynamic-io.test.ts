@@ -52,7 +52,7 @@ describe('dynamic-io', () => {
       expect($('#sentinel').text()).toBe('run')
     }
 
-    $ = await next.render$('/cases/task_at_root', {})
+    $ = await next.render$('/cases/task_at_boundary', {})
     if (isNextDev) {
       expect($('#sentinel').text()).toBe('run')
     } else {
