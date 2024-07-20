@@ -85,6 +85,7 @@ interface ImageUpstream {
   buffer: Buffer
   contentType: string | null | undefined
   cacheControl: string | null | undefined
+  etag: string
 }
 
 function getSupportedMimeType(options: string[], accept = ''): string {
@@ -102,6 +103,18 @@ export function getHash(items: (string | number | Buffer)[]) {
   }
   // See https://en.wikipedia.org/wiki/Base64#URL_applications
   return hash.digest('base64url')
+}
+
+export function extractEtag(
+  etag: string | null | undefined,
+  imageBuffer: Buffer
+) {
+  if (!!etag) {
+    // upstream etag needs to be base64url encoded due to weak etag signature
+    // as we store this in the cache-entry file name.
+    return Buffer.from(etag).toString('base64url')
+  }
+  return getImageEtag(imageBuffer)
 }
 
 export function getImageEtag(image: Buffer) {
@@ -477,7 +490,7 @@ export function shouldUsePreviouslyCachedEntry(
     // If the cached image is optimized
     previousCacheEntry.value.upstreamEtag !== previousCacheEntry.value.etag &&
     // and the upstream etag is the same as the previous cache entry's
-    getImageEtag(upstreamImage.buffer) === previousCacheEntry.value.upstreamEtag
+    upstreamImage.etag === previousCacheEntry.value.upstreamEtag
   )
 }
 
@@ -551,7 +564,8 @@ export async function fetchExternalImage(href: string): Promise<ImageUpstream> {
   const buffer = Buffer.from(await res.arrayBuffer())
   const contentType = res.headers.get('Content-Type')
   const cacheControl = res.headers.get('Cache-Control')
-  return { buffer, contentType, cacheControl }
+  const etag = extractEtag(res.headers.get('ETag'), buffer)
+  return { buffer, contentType, cacheControl, etag }
 }
 
 export async function fetchInternalImage(
@@ -586,7 +600,9 @@ export async function fetchInternalImage(
     const buffer = Buffer.concat(mocked.res.buffers)
     const contentType = mocked.res.getHeader('Content-Type')
     const cacheControl = mocked.res.getHeader('Cache-Control')
-    return { buffer, contentType, cacheControl }
+    const etag = extractEtag(mocked.res.getHeader('ETag'), buffer)
+
+    return { buffer, contentType, cacheControl, etag }
   } catch (err) {
     Log.error('upstream image response failed for', href, err)
     throw new ImageError(
@@ -618,7 +634,7 @@ export async function imageOptimizer(
   upstreamEtag: string
 }> {
   const { href, quality, width, mimeType } = paramsResult
-  const { buffer: upstreamBuffer } = imageUpstream
+  const { buffer: upstreamBuffer, etag: upstreamEtag } = imageUpstream
   const maxAge = getMaxAge(imageUpstream.cacheControl)
 
   if (shouldUsePreviouslyCachedEntry(imageUpstream, previousCacheEntry)) {
@@ -635,8 +651,6 @@ export async function imageOptimizer(
   const upstreamType =
     detectContentType(upstreamBuffer) ||
     imageUpstream.contentType?.toLowerCase().trim()
-
-  const upstreamEtag = getImageEtag(upstreamBuffer)
 
   if (upstreamType) {
     if (
