@@ -79,22 +79,14 @@ Turbopack also supports conditional aliasing through this field, similar to Node
 
 Through `next.config.js`, Turbopack can be configured to resolve modules with custom extensions, similar to webpack's [`resolve.extensions`](https://webpack.js.org/configuration/resolve/#resolveextensions) configuration.
 
-To configure resolve extensions, use the `resolveExtensions` field in `next.config.js`:
+In Next.js 14.1.1, the `experimental.turbo.resolveExtensions` field in `next.config.js` was used to configure resolve extensions. As of Next.js 15.0, this field has been moved up one level to `experimental.resolveExtensions`, which now affects both Turbopack and Webpack configurations.
+
+If not specified, it takes the default value `['.js', '.mjs', '.tsx', '.ts', '.jsx', '.json', '.node']`.
 
 ```js filename="next.config.js"
 module.exports = {
   experimental: {
-    turbo: {
-      resolveExtensions: [
-        '.mdx',
-        '.tsx',
-        '.ts',
-        '.jsx',
-        '.js',
-        '.mjs',
-        '.json',
-      ],
-    },
+    resolveExtensions: ['.mdx', '.tsx', '.ts', '.jsx', '.js', '.mjs', '.json'],
   },
 }
 ```
