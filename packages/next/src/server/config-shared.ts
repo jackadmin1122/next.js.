@@ -509,6 +509,13 @@ export interface ExperimentalConfig {
    * Allows previously fetched data to be re-used when editing server components.
    */
   serverComponentsHmrCache?: boolean
+
+  /**
+   * Overwrite default public environment variable prefix.
+   *
+   * @default "NEXT_PUBLIC_"
+   */
+  customPublicEnvPrefix?: string
 }
 
 export type ExportPathMap = {
@@ -1041,6 +1048,7 @@ export const defaultConfig: NextConfig = {
     after: false,
     staticGenerationRetryCount: undefined,
     serverComponentsHmrCache: true,
+    customPublicEnvPrefix: 'NEXT_PUBLIC_',
   },
   bundlePagesRouterDependencies: false,
 }
