@@ -17,10 +17,14 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 auto-hash-map = { workspace = true }
 dashmap = { workspace = true }
+indexmap = { workspace = true }
 once_cell = { workspace = true }
 parking_lot = { workspace = true }
+rand = { workspace = true }
+regex = { workspace = true }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 smallvec = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -28,6 +32,7 @@ turbo-prehash = { workspace = true }
 turbo-tasks = { workspace = true }
 turbo-tasks-hash = { workspace = true }
 turbo-tasks-malloc = { workspace = true, default-features = false }
+turbo-tasks-testing = { workspace = true }
 
 [build-dependencies]
 turbo-tasks-build = { workspace = true }
