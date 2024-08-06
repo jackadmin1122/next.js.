@@ -72,6 +72,71 @@ impl From<WrittenEndpoint> for NapiWrittenEndpoint {
     }
 }
 
+#[napi(object)]
+#[derive(Default)]
+pub struct NapiWrittenEndpointWithIssues {
+    pub written_endpoint: NapiWrittenEndpoint,
+    pub issues: Vec<NapiIssue>,
+    pub diagnostics: Vec<NapiDiagnostic>,
+}
+
+impl From<WrittenEndpointWithIssues> for NapiWrittenEndpointWithIssues {
+    fn from(written_endpoint_with_issues: WrittenEndpointWithIssues) -> Self {
+        Self {
+            written_endpoint: NapiWrittenEndpoint::from(
+                written_endpoint_with_issues.written.clone_value(),
+            ),
+            issues: written_endpoint_with_issues
+                .issues
+                .iter()
+                .map(|i| NapiIssue::from(&**i))
+                .collect(),
+            diagnostics: written_endpoint_with_issues
+                .diagnostics
+                .iter()
+                .map(|d| NapiDiagnostic::from(d))
+                .collect(),
+        }
+    }
+}
+
+#[turbo_tasks::value(serialization = "none")]
+#[derive(Debug, Clone)]
+pub struct AnnotatedWrittenRouteWithIssues {
+    pub written_route_with_issues: WrittenEndpointWithIssues,
+    pub route_type: String,
+    pub page: String,
+}
+
+#[napi(object)]
+#[derive(Default)]
+pub struct NapiAnnotatedWrittenRouteWithIssues {
+    pub written_route_with_issues: NapiWrittenEndpointWithIssues,
+    pub route_type: String,
+    pub page: String,
+}
+
+impl From<AnnotatedWrittenRouteWithIssues> for NapiAnnotatedWrittenRouteWithIssues {
+    fn from(annotated_written_route: AnnotatedWrittenRouteWithIssues) -> Self {
+        Self {
+            written_route_with_issues: NapiWrittenEndpointWithIssues::from(
+                annotated_written_route.written_route_with_issues,
+            ),
+            route_type: annotated_written_route.route_type,
+            page: annotated_written_route.page,
+        }
+    }
+}
+
+#[napi(object)]
+pub struct NapiWrittenGlobalEndpoints {
+    pub annotated_written_routes: Vec<NapiAnnotatedWrittenRouteWithIssues>,
+
+    pub app_endpoint: NapiWrittenEndpointWithIssues,
+    pub document_endpoint: NapiWrittenEndpointWithIssues,
+    pub error_endpoint: NapiWrittenEndpointWithIssues,
+}
+
 // NOTE(alexkirsz) We go through an extra layer of indirection here because of
 // two factors:
 // 1. rustc currently has a bug where using a dyn trait as a type argument to
@@ -89,14 +154,15 @@ impl Deref for ExternalEndpoint {
 }
 
 #[turbo_tasks::value(serialization = "none")]
-struct WrittenEndpointWithIssues {
-    written: ReadRef<WrittenEndpoint>,
-    issues: Arc<Vec<ReadRef<PlainIssue>>>,
-    diagnostics: Arc<Vec<ReadRef<PlainDiagnostic>>>,
+#[derive(Clone, Debug)]
+pub struct WrittenEndpointWithIssues {
+    pub written: ReadRef<WrittenEndpoint>,
+    pub issues: Arc<Vec<ReadRef<PlainIssue>>>,
+    pub diagnostics: Arc<Vec<ReadRef<PlainDiagnostic>>>,
 }
 
 #[turbo_tasks::function]
-async fn get_written_endpoint_with_issues(
+pub async fn get_written_endpoint_with_issues(
     endpoint: Vc<Box<dyn Endpoint>>,
 ) -> Result<Vc<WrittenEndpointWithIssues>> {
     let write_to_disk = endpoint.write_to_disk();

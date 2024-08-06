@@ -171,11 +171,13 @@ import {
   getTurbopackJsConfig,
   handleEntrypoints,
   type EntryIssuesMap,
-  handleRouteType,
-  handlePagesErrorRoute,
   formatIssue,
   isRelevantWarning,
 } from '../server/dev/turbopack-utils'
+import {
+  handleRouteType as handleRouteTypeBuild,
+  handlePagesErrorRoute as handlePagesErrorRouteBuild,
+} from './turbopack-utils'
 import { TurbopackManifestLoader } from '../server/dev/turbopack/manifest-loader'
 import type { Entrypoints } from '../server/dev/turbopack/types'
 import { buildCustomRoute } from '../lib/build-custom-route'
@@ -1512,31 +1514,16 @@ export default async function build(
           )
         }
 
-        for (const [page, route] of currentEntrypoints.page) {
-          enqueue(() =>
-            handleRouteType({
-              dev,
-              page,
-              pathname: page,
-              route,
+        const writtenEndpoints = await project.buildGlobal()
 
-              currentEntryIssues,
-              entrypoints: currentEntrypoints,
-              manifestLoader,
-              devRewrites: undefined,
-              productionRewrites: customRoutes.rewrites,
-              logErrors: false,
-            })
-          )
-        }
-
-        for (const [page, route] of currentEntrypoints.app) {
+        for (const annotatedWrittenRoute of writtenEndpoints.annotatedWrittenRoutes) {
           enqueue(() =>
-            handleRouteType({
-              page,
-              dev: false,
-              pathname: normalizeAppPath(page),
-              route,
+            handleRouteTypeBuild({
+              page: annotatedWrittenRoute.page,
+              writtenEndpoint: annotatedWrittenRoute.writtenRouteWithIssues,
+              routeType: annotatedWrittenRoute.routeType,
+              globalAppEndpoint: writtenEndpoints.appEndpoint,
+              globalDocumentEndpoint: writtenEndpoints.documentEndpoint,
               currentEntryIssues,
               entrypoints: currentEntrypoints,
               manifestLoader,
@@ -1548,7 +1535,10 @@ export default async function build(
         }
 
         enqueue(() =>
-          handlePagesErrorRoute({
+          handlePagesErrorRouteBuild({
+            globalAppEndpoint: writtenEndpoints.appEndpoint,
+            globalDocumentEndpoint: writtenEndpoints.documentEndpoint,
+            globalErrorEndpoint: writtenEndpoints.errorEndpoint,
             currentEntryIssues,
             entrypoints: currentEntrypoints,
             manifestLoader,
@@ -1557,6 +1547,7 @@ export default async function build(
             logErrors: false,
           })
         )
+
         await Promise.all(promises)
 
         await manifestLoader.writeManifests({

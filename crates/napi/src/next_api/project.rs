@@ -42,7 +42,11 @@ use turbopack_trace_utils::{
 use url::Url;
 
 use super::{
-    endpoint::ExternalEndpoint,
+    endpoint::{
+        get_written_endpoint_with_issues, AnnotatedWrittenRouteWithIssues, ExternalEndpoint,
+        NapiAnnotatedWrittenRouteWithIssues, NapiWrittenEndpointWithIssues,
+        NapiWrittenGlobalEndpoints,
+    },
     utils::{
         get_diagnostics, get_issues, subscribe, NapiDiagnostic, NapiIssue, RootTask,
         TurbopackResult, VcArc,
@@ -1075,6 +1079,137 @@ pub async fn project_trace_source(
         .await
         .map_err(|e| napi::Error::from_reason(PrettyPrintError(&e).to_string()))?;
     Ok(traced_frame)
+}
+
+#[napi]
+pub async fn project_build_global(
+    #[napi(ts_arg_type = "{ __napiType: \"Project\" }")] project: External<ProjectInstance>,
+) -> napi::Result<NapiWrittenGlobalEndpoints> {
+    let container = project.container;
+    let turbo_tasks = project.turbo_tasks.clone();
+
+    let (
+        annotated_written_routes_with_issues,
+        app_endpoint_with_issues,
+        document_endpoint_with_issues,
+        error_endpoint_with_issues,
+    ) = turbo_tasks
+        .run_once(async move {
+            let entrypoints = container.entrypoints().await?;
+
+            let mut annotated_written_routes_with_issues: Vec<AnnotatedWrittenRouteWithIssues> =
+                vec![];
+
+            for (path, route) in entrypoints.routes.iter() {
+                match route {
+                    Route::Page {
+                        ref html_endpoint,
+                        data_endpoint: _,
+                    } => {
+                        let written_endpoint_with_issues =
+                            &*get_written_endpoint_with_issues(*html_endpoint)
+                                .strongly_consistent()
+                                .await?;
+                        annotated_written_routes_with_issues.push(
+                            AnnotatedWrittenRouteWithIssues {
+                                written_route_with_issues: written_endpoint_with_issues.clone(),
+                                route_type: "page".to_string(),
+                                page: path.to_string(),
+                            },
+                        );
+                    }
+                    Route::PageApi { ref endpoint } => {
+                        let written_endpoint_with_issues =
+                            &*get_written_endpoint_with_issues(*endpoint)
+                                .strongly_consistent()
+                                .await?;
+                        annotated_written_routes_with_issues.push(
+                            AnnotatedWrittenRouteWithIssues {
+                                written_route_with_issues: written_endpoint_with_issues.clone(),
+                                route_type: "page-api".to_string(),
+                                page: path.to_string(),
+                            },
+                        );
+                    }
+                    Route::AppPage(routes) => {
+                        // TODO: Look at this... probably have to ask
+                        for module in routes {
+                            let html_endpoint: Vc<Box<dyn Endpoint>> = module.html_endpoint;
+                            let written_endpoint_with_issues =
+                                &*get_written_endpoint_with_issues(html_endpoint)
+                                    .strongly_consistent()
+                                    .await?;
+                            annotated_written_routes_with_issues.push(
+                                AnnotatedWrittenRouteWithIssues {
+                                    written_route_with_issues: written_endpoint_with_issues.clone(),
+                                    route_type: "app-page".to_string(),
+                                    page: module.original_name.to_string(),
+                                },
+                            );
+                        }
+                    }
+                    Route::AppRoute {
+                        original_name,
+                        ref endpoint,
+                    } => {
+                        let written_endpoint_with_issues =
+                            &*get_written_endpoint_with_issues(*endpoint)
+                                .strongly_consistent()
+                                .await?;
+                        annotated_written_routes_with_issues.push(
+                            AnnotatedWrittenRouteWithIssues {
+                                written_route_with_issues: written_endpoint_with_issues.clone(),
+                                route_type: "app-route".to_string(),
+                                page: original_name.to_string(),
+                            },
+                        );
+                    }
+                    Route::Conflict => {}
+                };
+            }
+
+            let app_endpoint_with_issues =
+                &*get_written_endpoint_with_issues(entrypoints.pages_app_endpoint)
+                    .strongly_consistent()
+                    .await?;
+
+            let document_endpoint_with_issues =
+                &*get_written_endpoint_with_issues(entrypoints.pages_document_endpoint)
+                    .strongly_consistent()
+                    .await?;
+
+            let error_endpoint_with_issues =
+                &*get_written_endpoint_with_issues(entrypoints.pages_error_endpoint)
+                    .strongly_consistent()
+                    .await?;
+
+            Ok((
+                annotated_written_routes_with_issues,
+                app_endpoint_with_issues.clone(),
+                document_endpoint_with_issues.clone(),
+                error_endpoint_with_issues.clone(),
+            ))
+        })
+        .await
+        .map_err(|e| napi::Error::from_reason(PrettyPrintError(&e).to_string()))?;
+
+    let napi_written_global_endpoints = NapiWrittenGlobalEndpoints {
+        annotated_written_routes: annotated_written_routes_with_issues
+            .iter()
+            .map(|annotated_written_route_with_issues| {
+                NapiAnnotatedWrittenRouteWithIssues::from(
+                    annotated_written_route_with_issues.to_owned(),
+                )
+            })
+            .collect(),
+        app_endpoint: NapiWrittenEndpointWithIssues::from(app_endpoint_with_issues.clone()),
+        document_endpoint: NapiWrittenEndpointWithIssues::from(
+            document_endpoint_with_issues.clone(),
+        ),
+        error_endpoint: NapiWrittenEndpointWithIssues::from(error_endpoint_with_issues.clone()),
+    };
+
+    Ok(napi_written_global_endpoints)
 }
 
 #[napi]

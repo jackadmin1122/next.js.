@@ -669,6 +669,8 @@ export interface Project {
     TurbopackResult<HmrIdentifiers>
   >
 
+  buildGlobal(): Promise<WrittenGlobalEndpoints>
+
   getSourceForAsset(filePath: string): Promise<string | null>
 
   traceSource(
@@ -770,6 +772,23 @@ export type WrittenEndpoint =
       serverPaths: ServerPath[]
       config: EndpointConfig
     }
+
+export type WrittenEndpointWithIssues = {
+  writtenEndpoint: WrittenEndpoint
+  issues: Issue[]
+  diagnostics: Diagnostics[]
+}
+
+export type WrittenGlobalEndpoints = {
+  annotatedWrittenRoutes: {
+    writtenRouteWithIssues: WrittenEndpointWithIssues
+    routeType: string
+    page: string
+  }[]
+  appEndpoint: WrittenEndpointWithIssues
+  documentEndpoint: WrittenEndpointWithIssues
+  errorEndpoint: WrittenEndpointWithIssues
+}
 
 function rustifyEnv(env: Record<string, string>): RustifiedEnv {
   return Object.entries(env)
@@ -1069,6 +1088,9 @@ function bindingToApi(
         async (callback) =>
           binding.projectHmrIdentifiersSubscribe(this._nativeProject, callback)
       )
+    }
+    buildGlobal(): Promise<TurbopackResult<WrittenGlobalEndpoints>> {
+      return binding.projectBuildGlobal(this._nativeProject)
     }
 
     traceSource(
