@@ -64,9 +64,10 @@ import { AppRenderSpan, NextNodeServerSpan } from '../lib/trace/constants'
 import { getTracer } from '../lib/trace/tracer'
 import { FlightRenderResult } from './flight-render-result'
 import {
-  createErrorHandler,
+  createFlightReactServerErrorHandler,
+  createHTMLReactServerErrorHandler,
+  createHTMLErrorHandler,
   type DigestedError,
-  type ErrorHandler,
 } from './create-error-handler'
 import {
   getShortDynamicParamType,
@@ -170,8 +171,6 @@ export type AppRenderContext = AppRenderBaseContext & {
   pagePath: string
   clientReferenceManifest: DeepReadonly<ClientReferenceManifest>
   assetPrefix: string
-  flightDataRendererErrorHandler: ErrorHandler
-  serverComponentsErrorHandler: ErrorHandler
   isNotFoundPath: boolean
   nonce: string | undefined
   res: BaseNextResponse
@@ -423,7 +422,12 @@ async function generateDynamicRSCPayload(
  * `generateDynamicRSCPayload` for information on the contents of the render result.
  */
 async function generateDynamicFlightRenderResult(
+  req: BaseNextRequest,
   ctx: AppRenderContext,
+  errorContext: Pick<
+    RequestErrorContext,
+    'routerKind' | 'routePath' | 'routeType'
+  >,
   options?: {
     actionResult: ActionResult
     skipFlight: boolean
@@ -432,6 +436,19 @@ async function generateDynamicFlightRenderResult(
     preloadCallbacks?: PreloadCallbacks
   }
 ): Promise<RenderResult> {
+  const renderOpts = ctx.renderOpts
+
+  function onFlightDataRenderError(err: DigestedError) {
+    return renderOpts.onInstrumentationRequestError?.(err, req, {
+      ...errorContext,
+      renderSource: 'react-server-components-payload',
+    })
+  }
+  const onError = createFlightReactServerErrorHandler(
+    !!renderOpts.dev,
+    onFlightDataRenderError
+  )
+
   const rscPayload = await generateDynamicRSCPayload(ctx, options)
 
   // For app dir, use the bundled version of Flight server renderer (renderToReadableStream)
@@ -440,7 +457,7 @@ async function generateDynamicFlightRenderResult(
     rscPayload,
     ctx.clientReferenceManifest.clientModules,
     {
-      onError: ctx.flightDataRendererErrorHandler,
+      onError,
       nonce: ctx.nonce,
     }
   )
@@ -452,6 +469,7 @@ async function generateDynamicFlightRenderResult(
 
 type RenderToStreamResult = {
   stream: RenderResultResponse
+  digestErrorsMap: Map<string, DigestedError>
   dynamicTracking?: null | DynamicTrackingState
   err?: unknown
 }
@@ -746,10 +764,8 @@ async function renderToHTMLOrFlightImpl(
   const {
     serverActionsManifest,
     ComponentMod,
-    dev,
     nextFontManifest,
     serverActions,
-    onInstrumentationRequestError,
     assetPrefix = '',
     enableTainting,
   } = renderOpts
@@ -855,19 +871,12 @@ async function renderToHTMLOrFlightImpl(
     serverModuleMap,
   })
 
-  const digestErrorsMap: Map<string, DigestedError> = new Map()
-  const allCapturedErrors: Error[] = []
-  const isNextExport = !!renderOpts.nextExport
   const { staticGenerationStore, requestStore, parsedRequestHeaders } = baseCtx
   const { isStaticGeneration } = staticGenerationStore
-  const isRoutePPREnabled = renderOpts.experimental.isRoutePPREnabled === true
 
-  // When static generation fails during PPR, we log the errors separately. We
-  // intentionally silence the error logger in this case to avoid double
-  // logging.
-  const silenceStaticGenerationErrors = isRoutePPREnabled && isStaticGeneration
   const isActionRequest = getServerActionRequestMetadata(req).isServerAction
 
+  // @TODO move this to an actual context like requestStore or staticGenerationStore
   const errorContext: Pick<
     RequestErrorContext,
     'routerKind' | 'routePath' | 'routeType'
@@ -876,65 +885,6 @@ async function renderToHTMLOrFlightImpl(
     routePath: pagePath,
     routeType: isActionRequest ? 'action' : 'render',
   }
-
-  // Including RSC rendering and flight data rendering
-  function getRSCError(err: DigestedError) {
-    const digest = err.digest
-    if (!digestErrorsMap.has(digest)) {
-      digestErrorsMap.set(digest, err)
-    }
-    return err
-  }
-
-  function getSSRError(err: DigestedError) {
-    // For SSR errors, if we have the existing digest in errors map,
-    // we should use the existing error object to avoid duplicate error logs.
-    if (digestErrorsMap.has(err.digest)) {
-      return digestErrorsMap.get(err.digest)!
-    }
-    return err
-  }
-
-  function onFlightDataRenderError(err: DigestedError) {
-    return onInstrumentationRequestError?.(err, req, {
-      ...errorContext,
-      renderSource: 'react-server-components-payload',
-    })
-  }
-
-  function onServerRenderError(err: DigestedError) {
-    const renderSource = digestErrorsMap.has(err.digest)
-      ? 'react-server-components'
-      : 'server-rendering'
-    return onInstrumentationRequestError?.(err, req, {
-      ...errorContext,
-      renderSource,
-    })
-  }
-
-  const serverComponentsErrorHandler = createErrorHandler({
-    dev,
-    isNextExport,
-    // RSC rendering error will report as SSR error
-    onReactStreamRenderError: undefined,
-    getErrorByRenderSource: getRSCError,
-    silenceLogger: silenceStaticGenerationErrors,
-  })
-  const flightDataRendererErrorHandler = createErrorHandler({
-    dev,
-    isNextExport,
-    onReactStreamRenderError: onFlightDataRenderError,
-    getErrorByRenderSource: getRSCError,
-    silenceLogger: silenceStaticGenerationErrors,
-  })
-  const htmlRendererErrorHandler = createErrorHandler({
-    dev,
-    isNextExport,
-    onReactStreamRenderError: onServerRenderError,
-    getErrorByRenderSource: getSSRError,
-    allCapturedErrors,
-    silenceLogger: silenceStaticGenerationErrors,
-  })
 
   ComponentMod.patchFetch()
 
@@ -997,15 +947,13 @@ async function renderToHTMLOrFlightImpl(
     pagePath,
     clientReferenceManifest,
     assetPrefix,
-    flightDataRendererErrorHandler,
-    serverComponentsErrorHandler,
     isNotFoundPath,
     nonce,
     res,
   }
 
   if (isRSCRequest && !isStaticGeneration) {
-    return generateDynamicFlightRenderResult(ctx)
+    return generateDynamicFlightRenderResult(req, ctx, errorContext)
   }
 
   getTracer().getRootSpanAttributes()?.set('next.route', pagePath)
@@ -1014,6 +962,7 @@ async function renderToHTMLOrFlightImpl(
   const actionRequestResult = await handleAction({
     req,
     res,
+    errorContext,
     ComponentMod,
     serverModuleMap,
     generateFlight: generateDynamicFlightRenderResult,
@@ -1031,7 +980,7 @@ async function renderToHTMLOrFlightImpl(
         'next.route': pagePath,
       },
     },
-    renderToStream2
+    renderToStream
   )
 
   let formState: null | any = null
@@ -1041,11 +990,11 @@ async function renderToHTMLOrFlightImpl(
       const asNotFound = true
       const response = await renderToStreamWithTracing(
         isStaticGeneration,
+        req,
+        res,
         ctx,
+        errorContext,
         metadata,
-        allCapturedErrors,
-        serverComponentsErrorHandler,
-        htmlRendererErrorHandler,
         staticGenerationStore,
         asNotFound,
         notFoundLoaderTree,
@@ -1070,11 +1019,11 @@ async function renderToHTMLOrFlightImpl(
   const asNotFound = isNotFoundPath
   let response = await renderToStreamWithTracing(
     isStaticGeneration,
+    req,
+    res,
     ctx,
+    errorContext,
     metadata,
-    allCapturedErrors,
-    serverComponentsErrorHandler,
-    htmlRendererErrorHandler,
     staticGenerationStore,
     asNotFound,
     loaderTree,
@@ -1110,7 +1059,9 @@ async function renderToHTMLOrFlightImpl(
   response.stream = await result.toUnchunkedString(true)
 
   const buildFailingError =
-    digestErrorsMap.size > 0 ? digestErrorsMap.values().next().value : null
+    response.digestErrorsMap.size > 0
+      ? response.digestErrorsMap.values().next().value
+      : null
 
   // If we're debugging partial prerendering, print all the dynamic API accesses
   // that occurred during the render.
@@ -1221,13 +1172,16 @@ export const renderToHTMLOrFlight: AppPageRender = (
   )
 }
 
-async function renderToStream2(
+async function renderToStream(
   isStaticGeneration: boolean,
+  req: BaseNextRequest,
+  res: BaseNextResponse,
   ctx: AppRenderContext,
+  errorContext: Pick<
+    RequestErrorContext,
+    'routerKind' | 'routePath' | 'routeType'
+  >,
   metadata: AppPageRenderResultMetadata,
-  allCapturedErrors: Error[],
-  serverComponentsErrorHandler: ReturnType<typeof createErrorHandler>,
-  htmlRendererErrorHandler: ReturnType<typeof createErrorHandler>,
   staticGenerationStore: StaticGenerationStore,
 
   asNotFound: boolean,
@@ -1276,16 +1230,48 @@ async function renderToStream2(
     renderOpts.page
   )
 
+  const reactServerErrorsByDigest: Map<string, DigestedError> = new Map()
+  const silenceLogger =
+    !!renderOpts.experimental.isRoutePPREnabled && isStaticGeneration
+  const serverComponentsErrorHandler = createHTMLReactServerErrorHandler(
+    !!renderOpts.dev,
+    !!renderOpts.nextExport,
+    reactServerErrorsByDigest,
+    silenceLogger,
+    // RSC rendering error will report as SSR error
+    // @TODO we should report RSC errors where they happen for instrumentation purposes
+    // and should omit the error reporter in the SSR layer instead
+    undefined
+  )
+  function onServerRenderError(err: DigestedError) {
+    const renderSource = reactServerErrorsByDigest.has(err.digest)
+      ? 'react-server-components'
+      : 'server-rendering'
+    return renderOpts.onInstrumentationRequestError?.(err, req, {
+      ...errorContext,
+      renderSource,
+    })
+  }
+  const allCapturedErrors: Array<unknown> = []
+  const htmlRendererErrorHandler = createHTMLErrorHandler(
+    !!renderOpts.dev,
+    !!renderOpts.nextExport,
+    reactServerErrorsByDigest,
+    allCapturedErrors,
+    silenceLogger,
+    onServerRenderError
+  )
+
   let dynamicTracking: null | DynamicTrackingState = null
   let primaryRenderReactServerStream: null | ReadableStream<Uint8Array> = null
   if (isStaticGeneration) {
     const setHeader = (name: string, value: string | string[]) => {
-      ctx.res.setHeader(name, value)
+      res.setHeader(name, value)
 
       metadata.headers ??= {}
-      metadata.headers[name] = ctx.res.getHeader(name)
+      metadata.headers[name] = res.getHeader(name)
 
-      return ctx.res
+      return res
     }
 
     try {
@@ -1536,6 +1522,7 @@ async function renderToStream2(
               )
             }
             return {
+              digestErrorsMap: reactServerErrorsByDigest,
               stream: await continueDynamicPrerender(prelude, {
                 getServerInsertedHTML,
               }),
@@ -1581,6 +1568,7 @@ async function renderToStream2(
             }
 
             return {
+              digestErrorsMap: reactServerErrorsByDigest,
               stream: await continueStaticPrerender(htmlStream, {
                 inlinedDataStream: createInlinedDataReadableStream(
                   inlinedReactServerDataStream,
@@ -1855,6 +1843,7 @@ async function renderToStream2(
           })
           const validateRootLayout = renderOpts.dev
           return {
+            digestErrorsMap: reactServerErrorsByDigest,
             stream: await continueFizzStream(await pendingResult, {
               inlinedDataStream: createInlinedDataReadableStream(
                 inlinedReactServerDataStream,
@@ -1983,6 +1972,7 @@ async function renderToStream2(
           // It is possible in the set of stream transforms for Dynamic HTML vs Dynamic Data may differ but currently both states
           // require the same set so we unify the code path here
           return {
+            digestErrorsMap: reactServerErrorsByDigest,
             stream: await continueDynamicPrerender(prelude, {
               getServerInsertedHTML,
             }),
@@ -2029,6 +2019,7 @@ async function renderToStream2(
           }
 
           return {
+            digestErrorsMap: reactServerErrorsByDigest,
             stream: await continueStaticPrerender(htmlStream, {
               inlinedDataStream: createInlinedDataReadableStream(
                 inlinedReactServerDataStream,
@@ -2099,6 +2090,7 @@ async function renderToStream2(
           tracingMetadata: tracingMetadata,
         })
         return {
+          digestErrorsMap: reactServerErrorsByDigest,
           stream: await continueFizzStream(htmlStream, {
             inlinedDataStream: createInlinedDataReadableStream(
               inlinedReactServerDataStream,
@@ -2145,12 +2137,12 @@ async function renderToStream2(
       }
 
       if (isNotFoundError(err)) {
-        ctx.res.statusCode = 404
+        res.statusCode = 404
       }
       let hasRedirectError = false
       if (isRedirectError(err)) {
         hasRedirectError = true
-        ctx.res.statusCode = getRedirectStatusCodeFromError(err)
+        res.statusCode = getRedirectStatusCodeFromError(err)
         if (err.mutableCookies) {
           const headers = new Headers()
 
@@ -2167,9 +2159,9 @@ async function renderToStream2(
         setHeader('Location', redirectUrl)
       }
 
-      const is404 = ctx.res.statusCode === 404
+      const is404 = res.statusCode === 404
       if (!is404 && !hasRedirectError && !shouldBailoutToCSR) {
-        ctx.res.statusCode = 500
+        res.statusCode = 500
       }
 
       const errorType = is404
@@ -2236,6 +2228,7 @@ async function renderToStream2(
           // Returning the error that was thrown so it can be used to handle
           // the response in the caller.
           err,
+          digestErrorsMap: reactServerErrorsByDigest,
           stream: await continueFizzStream(fizzStream, {
             inlinedDataStream: createInlinedDataReadableStream(
               // This is intentionally using the readable datastream from the
@@ -2271,7 +2264,7 @@ async function renderToStream2(
       }
     }
   } else {
-    const setHeader = ctx.res.setHeader.bind(ctx.res)
+    const setHeader = res.setHeader.bind(res)
 
     try {
       // This is a dynamic render. We don't do dynamic tracking because we're not prerendering
@@ -2310,6 +2303,7 @@ async function renderToStream2(
           )
 
           return {
+            digestErrorsMap: reactServerErrorsByDigest,
             stream: chainStreams(
               inlinedReactServerDataStream,
               createDocumentClosingStream()
@@ -2349,6 +2343,7 @@ async function renderToStream2(
             tracingMetadata: tracingMetadata,
           })
           return {
+            digestErrorsMap: reactServerErrorsByDigest,
             stream: await continueDynamicHTMLResume(htmlStream, {
               inlinedDataStream: createInlinedDataReadableStream(
                 reactServerDataStream,
@@ -2423,6 +2418,7 @@ async function renderToStream2(
       const generateStaticHTML = renderOpts.supportsDynamicResponse !== true
       const validateRootLayout = renderOpts.dev
       return {
+        digestErrorsMap: reactServerErrorsByDigest,
         stream: await continueFizzStream(htmlStream, {
           inlinedDataStream: createInlinedDataReadableStream(
             reactServerDataStream,
@@ -2463,12 +2459,12 @@ async function renderToStream2(
       }
 
       if (isNotFoundError(err)) {
-        ctx.res.statusCode = 404
+        res.statusCode = 404
       }
       let hasRedirectError = false
       if (isRedirectError(err)) {
         hasRedirectError = true
-        ctx.res.statusCode = getRedirectStatusCodeFromError(err)
+        res.statusCode = getRedirectStatusCodeFromError(err)
         if (err.mutableCookies) {
           const headers = new Headers()
 
@@ -2485,9 +2481,9 @@ async function renderToStream2(
         setHeader('Location', redirectUrl)
       }
 
-      const is404 = ctx.res.statusCode === 404
+      const is404 = res.statusCode === 404
       if (!is404 && !hasRedirectError && !shouldBailoutToCSR) {
-        ctx.res.statusCode = 500
+        res.statusCode = 500
       }
 
       const errorType = is404
@@ -2561,6 +2557,7 @@ async function renderToStream2(
           // Returning the error that was thrown so it can be used to handle
           // the response in the caller.
           err,
+          digestErrorsMap: reactServerErrorsByDigest,
           stream: await continueFizzStream(fizzStream, {
             inlinedDataStream: createInlinedDataReadableStream(
               // This is intentionally using the readable datastream from the
