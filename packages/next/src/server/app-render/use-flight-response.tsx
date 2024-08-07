@@ -131,15 +131,25 @@ function writeInitialInstructions(
   scriptStart: string,
   formState: unknown | null
 ) {
-  controller.enqueue(
-    encoder.encode(
-      `${scriptStart}(self.__next_f=self.__next_f||[]).push(${htmlEscapeJsonString(
-        JSON.stringify([INLINE_FLIGHT_PAYLOAD_BOOTSTRAP])
-      )});self.__next_f.push(${htmlEscapeJsonString(
-        JSON.stringify([INLINE_FLIGHT_PAYLOAD_FORM_STATE, formState])
-      )})</script>`
+  if (formState != null) {
+    controller.enqueue(
+      encoder.encode(
+        `${scriptStart}(self.__next_f=self.__next_f||[]).push(${htmlEscapeJsonString(
+          JSON.stringify([INLINE_FLIGHT_PAYLOAD_BOOTSTRAP])
+        )});self.__next_f.push(${htmlEscapeJsonString(
+          JSON.stringify([INLINE_FLIGHT_PAYLOAD_FORM_STATE, formState])
+        )})</script>`
+      )
     )
-  )
+  } else {
+    controller.enqueue(
+      encoder.encode(
+        `${scriptStart}(self.__next_f=self.__next_f||[]).push(${htmlEscapeJsonString(
+          JSON.stringify([INLINE_FLIGHT_PAYLOAD_BOOTSTRAP])
+        )})</script>`
+      )
+    )
+  }
 }
 
 function writeFlightDataInstruction(

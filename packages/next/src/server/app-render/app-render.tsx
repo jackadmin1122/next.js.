@@ -972,8 +972,7 @@ async function renderToHTMLOrFlightImpl(
       metadata,
       staticGenerationStore,
       asNotFound,
-      loaderTree,
-      undefined
+      loaderTree
     )
 
     // If we're debugging partial prerendering, print all the dynamic API accesses
@@ -1605,9 +1604,13 @@ async function prerenderToStream(
   staticGenerationStore: StaticGenerationStore,
 
   asNotFound: boolean,
-  tree: LoaderTree,
-  formState: any
+  tree: LoaderTree
 ): Promise<PrenderToStringResult> {
+  // When prerendering formState is always null. We still include it
+  // because some shared APIs expect a formState value and this is slightly
+  // more explicit than making it an optional function argument
+  const formState = null
+
   const renderOpts = ctx.renderOpts
   const ComponentMod = renderOpts.ComponentMod
   // TODO: fix this typescript
