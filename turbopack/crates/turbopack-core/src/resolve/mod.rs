@@ -13,8 +13,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{Instrument, Level};
 use turbo_tasks::{trace::TraceRawVcs, RcStr, TaskInput, TryJoinIterExt, Value, ValueToString, Vc};
 use turbo_tasks_fs::{
-    util::{normalize_path, normalize_request},
-    FileSystemEntryType, FileSystemPath, RealPathResult,
+    util::normalize_request, FileSystemEntryType, FileSystemPath, RealPathResult,
 };
 
 use self::{
@@ -888,11 +887,10 @@ impl ResolveResult {
         ))
     }
 
-    /// Returns a new [ResolveResult] where all [RequestKey]s are updates. The
-    /// `old_request_key` (prefix) is replaced with the `request_key`. It's not
-    /// expected that the [ResolveResult] contains [RequestKey]s that don't have
-    /// the `old_request_key` prefix, but if there are still some, they are
-    /// discarded.
+    /// Returns a new [ResolveResult] where all [RequestKey]s are updated. The `old_request_key`
+    /// (prefix) is replaced with the `request_key`. It's not expected that the [ResolveResult]
+    /// contains [RequestKey]s that don't have the `old_request_key` prefix, but if there are still
+    /// some, they are discarded.
     #[turbo_tasks::function]
     pub async fn with_replaced_request_key(
         self: Vc<Self>,
@@ -916,6 +914,43 @@ impl ResolveResult {
                     },
                     v.clone(),
                 ))
+            })
+            .collect();
+        Ok(ResolveResult {
+            primary: new_primary,
+            affecting_sources: this.affecting_sources.clone(),
+        }
+        .into())
+    }
+
+    /// Returns a new [ResolveResult] where all [RequestKey]s are updated. All keys matching
+    /// `old_request_key` are rewritten according to `request_key`. It's not expected that the
+    /// [ResolveResult] contains [RequestKey]s that do not match the `old_request_key` prefix, but
+    /// if there are still some, they are discarded.
+    #[turbo_tasks::function]
+    pub async fn with_replaced_request_key_pattern(
+        self: Vc<Self>,
+        old_request_key: Value<Pattern>,
+        request_key: Value<Pattern>,
+    ) -> Result<Vc<Self>> {
+        let old_request_key = &*old_request_key;
+        let request_key = &*request_key;
+        let this = self.await?;
+        let new_primary = this
+            .primary
+            .iter()
+            .map(|(k, v)| {
+                (
+                    RequestKey {
+                        request: k
+                            .request
+                            .as_ref()
+                            .and_then(|r| old_request_key.match_apply_template(r, request_key))
+                            .map(Into::into),
+                        conditions: k.conditions.clone(),
+                    },
+                    v.clone(),
+                )
             })
             .collect();
         Ok(ResolveResult {
@@ -2450,7 +2485,18 @@ async fn resolve_import_map_result(
             {
                 None
             } else {
-                Some(resolve_internal(lookup_path, request, options))
+                let result = resolve_internal(lookup_path, request, options);
+                if let (Some(rewritten), Some(original)) = (
+                    request.await?.request_pattern(),
+                    original_request.await?.request_pattern(),
+                ) {
+                    Some(result.with_replaced_request_key_pattern(
+                        Value::new(rewritten),
+                        Value::new(original),
+                    ))
+                } else {
+                    Some(result)
+                }
             }
         }
         ImportMapResult::Alternatives(list) => {
@@ -2572,8 +2618,8 @@ async fn handle_exports_imports_field(
     let mut conditions_state = HashMap::new();
 
     let query_str = query.await?;
+    let req = Pattern::Constant(format!("{}{}", path, query_str).into());
 
-    let req = format!("{}{}", path, query_str);
     let values = exports_imports_field
         .lookup(&req)
         .map(AliasMatch::try_into_self)
@@ -2592,9 +2638,12 @@ async fn handle_exports_imports_field(
 
     let mut resolved_results = Vec::new();
     for (result_path, conditions) in results {
-        if let Some(result_path) = normalize_path(result_path) {
-            let request =
-                Request::parse(Value::new(RcStr::from(format!("./{}", result_path)).into()));
+        if let Some(result_path) = result_path.with_normalized_path() {
+            let request = Request::parse(Value::new(Pattern::Concatenation(vec![
+                Pattern::Constant("./".into()),
+                result_path,
+            ])));
+
             let resolve_result = resolve_internal_boxed(package_path, request, options).await?;
             if conditions.is_empty() {
                 resolved_results.push(resolve_result.with_request(path.into()));
