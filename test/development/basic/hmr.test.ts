@@ -1206,4 +1206,27 @@ describe.each([
       await next.patchFile(pageName, originalContent)
     }
   })
+
+  it('should reload the page when the server restarts', async () => {
+    const browser = await webdriver(next.url, basePath + '/hmr/about', {
+      headless: false,
+    })
+    await check(() => getBrowserBodyText(browser), /This is the about page/)
+
+    await next.destroy()
+
+    let requestedUrlPromise = new Promise((resolve) => {
+      browser.on('request', (req) => {
+        resolve(req.url())
+      })
+    })
+
+    next = await createNext({
+      files: join(__dirname, 'hmr'),
+      nextConfig,
+      forcedPort: next.appPort,
+    })
+
+    expect(await requestedUrlPromise).toEndWith('/hmr/about')
+  })
 })
