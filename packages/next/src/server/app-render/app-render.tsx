@@ -160,6 +160,7 @@ export type AppRenderContext = {
   getDynamicParamFromSegment: GetDynamicParamFromSegment
   query: NextParsedUrlQuery
   isPrefetch: boolean
+  isAction: boolean
   requestTimestamp: number
   appUsingSizeAdjustment: boolean
   flightRouterState?: FlightRouterState
@@ -414,6 +415,17 @@ async function generateDynamicRSCPayload(
   }
 }
 
+function createErrorContext(
+  ctx: AppRenderContext,
+  renderSource: RequestErrorContext['renderSource']
+): RequestErrorContext {
+  return {
+    routerKind: 'App Router',
+    routePath: ctx.pagePath,
+    routeType: ctx.isAction ? 'action' : 'render',
+    renderSource,
+  }
+}
 /**
  * Produces a RenderResult containing the Flight data for the given request. See
  * `generateDynamicRSCPayload` for information on the contents of the render result.
@@ -421,10 +433,6 @@ async function generateDynamicRSCPayload(
 async function generateDynamicFlightRenderResult(
   req: BaseNextRequest,
   ctx: AppRenderContext,
-  errorContext: Pick<
-    RequestErrorContext,
-    'routerKind' | 'routePath' | 'routeType'
-  >,
   options?: {
     actionResult: ActionResult
     skipFlight: boolean
@@ -436,10 +444,11 @@ async function generateDynamicFlightRenderResult(
   const renderOpts = ctx.renderOpts
 
   function onFlightDataRenderError(err: DigestedError) {
-    return renderOpts.onInstrumentationRequestError?.(err, req, {
-      ...errorContext,
-      renderSource: 'react-server-components-payload',
-    })
+    return renderOpts.onInstrumentationRequestError?.(
+      err,
+      req,
+      createErrorContext(ctx, 'react-server-components-payload')
+    )
   }
   const onError = createFlightReactServerErrorHandler(
     !!renderOpts.dev,
@@ -911,6 +920,8 @@ async function renderToHTMLOrFlightImpl(
     pagePath
   )
 
+  const isActionRequest = getServerActionRequestMetadata(req).isServerAction
+
   const ctx: AppRenderContext = {
     componentMod: ComponentMod,
     renderOpts,
@@ -920,6 +931,7 @@ async function renderToHTMLOrFlightImpl(
     getDynamicParamFromSegment,
     query,
     isPrefetch: isPrefetchRequest,
+    isAction: isActionRequest,
     requestTimestamp,
     appUsingSizeAdjustment,
     flightRouterState,
@@ -931,18 +943,6 @@ async function renderToHTMLOrFlightImpl(
     isNotFoundPath,
     nonce,
     res,
-  }
-
-  const isActionRequest = getServerActionRequestMetadata(req).isServerAction
-
-  // @TODO move this to an actual context like requestStore or staticGenerationStore
-  const errorContext: Pick<
-    RequestErrorContext,
-    'routerKind' | 'routePath' | 'routeType'
-  > = {
-    routerKind: 'App Router',
-    routePath: pagePath,
-    routeType: isActionRequest ? 'action' : 'render',
   }
 
   getTracer().getRootSpanAttributes()?.set('next.route', pagePath)
@@ -969,7 +969,6 @@ async function renderToHTMLOrFlightImpl(
       req,
       res,
       ctx,
-      errorContext,
       metadata,
       staticGenerationStore,
       asNotFound,
@@ -1039,7 +1038,7 @@ async function renderToHTMLOrFlightImpl(
   } else {
     // We're rendering dynamically
     if (isRSCRequest) {
-      return generateDynamicFlightRenderResult(req, ctx, errorContext)
+      return generateDynamicFlightRenderResult(req, ctx)
     }
 
     const renderToStreamWithTracing = getTracer().wrap(
@@ -1059,7 +1058,6 @@ async function renderToHTMLOrFlightImpl(
       const actionRequestResult = await handleAction({
         req,
         res,
-        errorContext,
         ComponentMod,
         serverModuleMap,
         generateFlight: generateDynamicFlightRenderResult,
@@ -1077,7 +1075,6 @@ async function renderToHTMLOrFlightImpl(
             req,
             res,
             ctx,
-            errorContext,
             asNotFound,
             notFoundLoaderTree,
             formState
@@ -1104,7 +1101,6 @@ async function renderToHTMLOrFlightImpl(
       req,
       res,
       ctx,
-      errorContext,
       asNotFound,
       loaderTree,
       formState
@@ -1202,10 +1198,6 @@ async function renderToStream(
   req: BaseNextRequest,
   res: BaseNextResponse,
   ctx: AppRenderContext,
-  errorContext: Pick<
-    RequestErrorContext,
-    'routerKind' | 'routePath' | 'routeType'
-  >,
 
   asNotFound: boolean,
   tree: LoaderTree,
@@ -1269,10 +1261,11 @@ async function renderToStream(
     const renderSource = reactServerErrorsByDigest.has(err.digest)
       ? 'react-server-components'
       : 'server-rendering'
-    return renderOpts.onInstrumentationRequestError?.(err, req, {
-      ...errorContext,
-      renderSource,
-    })
+    return renderOpts.onInstrumentationRequestError?.(
+      err,
+      req,
+      createErrorContext(ctx, renderSource)
+    )
   }
   const allCapturedErrors: Array<unknown> = []
   const htmlRendererErrorHandler = createHTMLErrorHandler(
@@ -1608,10 +1601,6 @@ async function prerenderToStream(
   req: BaseNextRequest,
   res: BaseNextResponse,
   ctx: AppRenderContext,
-  errorContext: Pick<
-    RequestErrorContext,
-    'routerKind' | 'routePath' | 'routeType'
-  >,
   metadata: AppPageRenderResultMetadata,
   staticGenerationStore: StaticGenerationStore,
 
@@ -1678,10 +1667,11 @@ async function prerenderToStream(
     const renderSource = reactServerErrorsByDigest.has(err.digest)
       ? 'react-server-components'
       : 'server-rendering'
-    return renderOpts.onInstrumentationRequestError?.(err, req, {
-      ...errorContext,
-      renderSource,
-    })
+    return renderOpts.onInstrumentationRequestError?.(
+      err,
+      req,
+      createErrorContext(ctx, renderSource)
+    )
   }
   const allCapturedErrors: Array<unknown> = []
   const htmlRendererErrorHandler = createHTMLErrorHandler(

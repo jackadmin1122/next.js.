@@ -4,7 +4,6 @@ import type { RequestStore } from '../../client/components/request-async-storage
 import type { AppRenderContext, GenerateFlight } from './app-render'
 import type { AppPageModule } from '../../server/route-modules/app-page/module'
 import type { BaseNextRequest, BaseNextResponse } from '../base-http'
-import type { RequestErrorContext } from '../instrumentation/types'
 
 import {
   RSC_HEADER,
@@ -404,7 +403,6 @@ type ServerActionsConfig = {
 export async function handleAction({
   req,
   res,
-  errorContext,
   ComponentMod,
   serverModuleMap,
   generateFlight,
@@ -415,10 +413,6 @@ export async function handleAction({
 }: {
   req: BaseNextRequest
   res: BaseNextResponse
-  errorContext: Pick<
-    RequestErrorContext,
-    'routerKind' | 'routePath' | 'routeType'
-  >
   ComponentMod: AppPageModule
   serverModuleMap: ServerModuleMap
   generateFlight: GenerateFlight
@@ -545,7 +539,7 @@ export async function handleAction({
 
         return {
           type: 'done',
-          result: await generateFlight(req, ctx, errorContext, {
+          result: await generateFlight(req, ctx, {
             actionResult: promise,
             // if the page was not revalidated, we can skip the rendering the flight tree
             skipFlight: !staticGenerationStore.pathWasRevalidated,
@@ -823,7 +817,7 @@ export async function handleAction({
           requestStore,
         })
 
-        actionResult = await generateFlight(req, ctx, errorContext, {
+        actionResult = await generateFlight(req, ctx, {
           actionResult: Promise.resolve(returnVal),
           // if the page was not revalidated, or if the action was forwarded from another worker, we can skip the rendering the flight tree
           skipFlight:
@@ -901,7 +895,7 @@ export async function handleAction({
         }
         return {
           type: 'done',
-          result: await generateFlight(req, ctx, errorContext, {
+          result: await generateFlight(req, ctx, {
             skipFlight: false,
             actionResult: promise,
             asNotFound: true,
@@ -934,7 +928,7 @@ export async function handleAction({
 
       return {
         type: 'done',
-        result: await generateFlight(req, ctx, errorContext, {
+        result: await generateFlight(req, ctx, {
           actionResult: promise,
           // if the page was not revalidated, or if the action was forwarded from another worker, we can skip the rendering the flight tree
           skipFlight:
